@@ -11,9 +11,13 @@ concurrency:
 
 jobs:
   warmup:
-    environment: main
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    environment: main
+    outputs:
+      warmup_status: ${{ steps.ping.outputs.warmup_status }}
+      warmup_message: ${{ steps.ping.outputs.warmup_message }}
+
     steps:
       - name: Validate configuration
         env:
@@ -29,35 +33,64 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code
 
       - name: Ping Claude to anchor 5-hour window
+        id: ping
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_OAUTH_TOKEN }}
+        shell: bash
         run: |
           mkdir -p ~/.claude
           echo '{"hasCompletedOnboarding":true}' > ~/.claude.json
+
           output_file="$(mktemp)"
           set +e
           claude -p "hi" --model haiku --no-session-persistence >"$output_file" 2>&1
           status=$?
           set -e
-          cat "$output_file"
 
           if [ $status -eq 0 ]; then
-            echo "Claude warmup request succeeded."
-            echo "✓ Warmup complete"
+            echo "warmup_status=success" >> "$GITHUB_OUTPUT"
+            echo "warmup_message=Claude warmup request succeeded." >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if grep -Eiq "expired|unauthorized|invalid token|authentication|auth failed|login required|not logged in" "$output_file"; then
-            echo "Claude token appears invalid or expired."
-            echo "Run 'claude setup-token' locally and update the CLAUDE_OAUTH_TOKEN GitHub secret."
+            echo "warmup_status=failure" >> "$GITHUB_OUTPUT"
+            echo "warmup_message=Claude token appears invalid or expired." >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
           if grep -qi "rate limit" "$output_file"; then
-            echo "Claude reported a rate limit; treating as warmup success."
-            echo "✓ Warmup complete"
+            echo "warmup_status=success" >> "$GITHUB_OUTPUT"
+            echo "warmup_message=Claude reported a rate limit; treating as warmup success." >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Claude warmup failed with an unexpected error."
+          echo "warmup_status=failure" >> "$GITHUB_OUTPUT"
+          echo "warmup_message=Claude warmup failed with an unexpected error." >> "$GITHUB_OUTPUT"
           exit $status
+
+      - name: Notify WeCom webhook (always)
+        if: ${{ always() }}
+        env:
+          WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
+          STATUS: ${{ steps.ping.outputs.warmup_status }}
+          MSG: ${{ steps.ping.outputs.warmup_message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          if [ -z "$WECOM_WEBHOOK_KEY" ]; then
+            echo "WECOM_WEBHOOK_KEY secret is not set; skip notify."
+            exit 0
+          fi
+
+          # fallback
+          if [ -z "$STATUS" ]; then
+            STATUS="failure"
+            MSG="Warmup failed before ping step (check logs)."
+          fi
+
+          content="Claude Warmup: ${STATUS} ${MSG} Repo: $GITHUB_REPOSITORY Run: ${RUN_URL}"
+
+          curl -sS -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${WECOM_WEBHOOK_KEY}" \
+            -H "Content-Type: application/json" \
+            --data-binary "$(jq -nc --arg c "$content" '{msgtype:"text",text:{content:$c}}')"
