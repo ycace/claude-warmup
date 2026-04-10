@@ -89,8 +89,7 @@ jobs:
             MSG="Warmup failed before ping step (check logs)."
           fi
 
-          content="
-          Claude Warmup: ${STATUS} 
+          content="Claude Warmup: ${STATUS} 
           Debug Info: ${MSG} 
           Run: ${RUN_URL}"
 
