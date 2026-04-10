@@ -89,7 +89,10 @@ jobs:
             MSG="Warmup failed before ping step (check logs)."
           fi
 
-          content="Claude Warmup: ${STATUS} ${MSG} Repo: $GITHUB_REPOSITORY Run: ${RUN_URL}"
+          content="
+          Claude Warmup: ${STATUS} 
+          Debug Info: ${MSG} 
+          Run: ${RUN_URL}"
 
           curl -sS -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${WECOM_WEBHOOK_KEY}" \
             -H "Content-Type: application/json" \
